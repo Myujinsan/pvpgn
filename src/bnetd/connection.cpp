@@ -2277,6 +2277,17 @@ namespace pvpgn
 				return -1;
 			}
 
+			// Protection from hack attempt
+			// Limit out queue packets due to it may cause memory leak with not enough memory program crash on a server machine
+			t_queue ** q = &c->protocol.queues.outqueue;
+			if (queue_get_length((t_queue const * const *)q) > 1000)
+			{
+				queue_clear(q);
+				conn_set_state(c, conn_state_destroy);
+				eventlog(eventlog_level_error, __FUNCTION__, "outqueue reached limit of 1000 packets (hack attempt?)");
+				return 0;
+			}
+
 			queue_push_packet((t_queue * *)&c->protocol.queues.outqueue, packet);
 			if (!c->protocol.queues.outsizep++) fdwatch_update_fd(c->socket.fdw_idx, fdwatch_type_read | fdwatch_type_write);
 
@@ -2638,6 +2649,12 @@ namespace pvpgn
 			}
 			else
 				std::strcpy(playerinfo, revtag); /* open char */
+
+#ifdef WITH_LUA
+			// change icon info from Lua
+			if (const char * iconinfo = lua_handle_user_icon((t_connection*)c, playerinfo))
+				return iconinfo;
+#endif
 
 			return playerinfo;
 		}
@@ -3101,8 +3118,11 @@ namespace pvpgn
 			t_elem *  curr;
 
 			if (!prefs_get_quota() ||
-				!conn_get_account(con) ||
-				(account_get_command_groups(conn_get_account(con)) & command_get_group("/admin-con"))) return 0;
+				!conn_get_account(con)
+				// FIXME: (HarpyWar) do not allow flood for admins due to possible abuse with quick command sending that high load a server processor
+				//                   If we really need to ignore flood protection, it can be allowed in Lua config for special users
+				/* || (account_get_command_groups(conn_get_account(con)) & command_get_group("/admin-con"))*/ 
+				) return 0;
 
 			if (std::strlen(text) > prefs_get_quota_maxline())
 			{
@@ -3764,9 +3784,15 @@ namespace pvpgn
 					eventlog(eventlog_level_info, __FUNCTION__, "[%d] %s using user-selected icon [%s]", conn_get_socket(c), revtag, usericon);
 				}
 			}
-
+#ifdef WITH_LUA
+			// change icon info from Lua
+			if (const char * iconinfo = lua_handle_user_icon(c, tempplayerinfo))
+			{
+				conn_set_w3_playerinfo(c, iconinfo);
+				return 0;
+			}
+#endif
 			conn_set_w3_playerinfo(c, tempplayerinfo);
-
 			return 0;
 		}
 
@@ -4175,7 +4201,6 @@ namespace pvpgn
 			{
 				return -1;
 			}
-
 			if (!(rpacket = packet_create(packet_class_bnet)))
 				return -1;
 
@@ -4192,6 +4217,27 @@ namespace pvpgn
 			return 0;
 		}
 
+		extern int conn_client_requiredwork(t_connection * c, const char * filename)
+		{
+			t_packet    * rpacket;
+
+			if (!c)
+			{
+				eventlog(eventlog_level_error, __FUNCTION__, "got NULL conn");
+				return -1;
+			}
+			if (!(rpacket = packet_create(packet_class_bnet)))
+				return -1;
+
+			packet_set_size(rpacket, sizeof(t_server_requiredwork));
+			packet_set_type(rpacket, SERVER_REQUIREDWORK);
+			packet_append_string(rpacket, filename); // filename should be "IX86ExtraWork.mpq"
+
+			conn_push_outqueue(c, rpacket);
+			packet_del_ref(rpacket);
+
+			return 0;
+		}
 	}
 
 }

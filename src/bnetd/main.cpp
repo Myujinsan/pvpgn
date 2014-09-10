@@ -90,6 +90,7 @@
 #include "topic.h"
 #include "handle_apireg.h"
 #include "i18n.h"
+#include "userlog.h"
 #include "common/setup_after.h"
 
 #ifdef WITH_LUA
@@ -384,6 +385,7 @@ int pre_server_startup(void)
 	if (realmlist_create(prefs_get_realmfile()) < 0)
 		eventlog(eventlog_level_error, __FUNCTION__, "could not load realm list");
 	topiclist_load(prefs_get_topicfile());
+	userlog_init();
 
 #ifdef WITH_LUA
 	lua_load(prefs_get_scriptdir());
@@ -465,7 +467,7 @@ void pvpgn_greeting(void)
 
 	if (!(uname(&utsbuf) < 0))
 	{
-		eventlog(eventlog_level_info, __FUNCTION__, "running on %s %s %s (%s)", utsbuf.sysname, utsbuf.version, utsbuf.release, utsbuf.machine);
+		eventlog(eventlog_level_info, __FUNCTION__, "running on %s (%s %s, %s)", utsbuf.sysname, utsbuf.version, utsbuf.release, utsbuf.machine);
 	}
 
 	printf("You are currently Running "PVPGN_SOFTWARE" "PVPGN_VERSION"\n");

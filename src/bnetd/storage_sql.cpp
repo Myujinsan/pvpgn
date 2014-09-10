@@ -3,6 +3,7 @@
 * Copyright (C) 2002 zap-zero
 * Copyright (C) 2002,2003 Dizzy
 * Copyright (C) 2002 Zzzoom
+* Copyright (C) 2014 HarpyWar
 *
 * This program is free software; you can redistribute it and/or
 * modify it under the terms of the GNU General Public License
@@ -25,10 +26,15 @@
 
 #include <cstring>
 #include <cstdlib>
+#include <vector>
+#include <map>
+#include <iterator>
+#include <algorithm>
 
 #include "compat/snprintf.h"
 #include "common/eventlog.h"
 #include "common/util.h"
+#include "common/xstring.h"
 
 #define SQL_INTERNAL
 # include "sql_common.h"
@@ -43,7 +49,7 @@ namespace pvpgn
 	{
 
 		static t_storage_info *sql_create_account(char const *);
-		static int sql_read_attrs(t_storage_info *, t_read_attr_func, void *);
+		static int sql_read_attrs(t_storage_info *, t_read_attr_func, void *, const char *);
 		static t_attr *sql_read_attr(t_storage_info *, const char *);
 		static int sql_write_attrs(t_storage_info *, const t_hlist *);
 		static t_storage_info * sql_read_account(const char *, unsigned);
@@ -71,6 +77,9 @@ namespace pvpgn
 			sql_write_team,
 			sql_remove_team
 		};
+
+		// Attribute names that are assurance exist in database
+		std::map<std::string, std::vector<std::string> > knownattributes;
 
 		static char query[512];
 
@@ -203,7 +212,7 @@ namespace pvpgn
 			return NULL;
 		}
 
-		static int sql_read_attrs(t_storage_info * info, t_read_attr_func cb, void *data)
+		static int sql_read_attrs(t_storage_info * info, t_read_attr_func cb, void *data, const char *ktab)
 		{
 #ifndef SQL_ON_DEMAND
 			t_sql_res *result = NULL;
@@ -233,6 +242,10 @@ namespace pvpgn
 
 			for (tab = sql_tables; *tab; tab++)
 			{
+				// process only a table where the attribute is in
+				if (strcmp(ktab, *tab) != 0)
+					continue;
+
 				snprintf(query, sizeof(query), "SELECT * FROM %s%s WHERE "SQL_UID_FIELD"='%u'", tab_prefix, *tab, uid);
 
 				//      eventlog(eventlog_level_trace, __FUNCTION__, "query: \"%s\"",query);
@@ -321,6 +334,7 @@ namespace pvpgn
 			}
 
 			snprintf(query, sizeof(query), "SELECT `%s` FROM %s%s WHERE " SQL_UID_FIELD " = %u", col, tab_prefix, tab, uid);
+			//eventlog(eventlog_level_error, __FUNCTION__, query);
 			if ((result = sql->query_res(query)) == NULL)
 				return NULL;
 
@@ -394,7 +408,10 @@ namespace pvpgn
 
 			uid = *((unsigned int *)info);
 
-			hlist_for_each(curr, (t_hlist*)attrs) {
+			std::map<std::string, std::string > queries;
+
+			hlist_for_each(curr, (t_hlist*)attrs) 
+			{
 				attr = hlist_entry(curr, t_attr, link);
 
 				if (!attr_get_dirty(attr))
@@ -422,7 +439,19 @@ namespace pvpgn
 					*p = '"';
 
 				sql->escape_string(escape, safeval, std::strlen(safeval));
+				
+				// if attribute found in known attributes list
+				if (std::find(knownattributes[tab].begin(), knownattributes[tab].end(), col) != knownattributes[tab].end())
+				{
+					// append new field and value
+					queries[tab] += "`" + std::string(col) + "` = '" + std::string(escape) + "', ";
 
+					/* PASS NEXT CODE EXECUTION
+					(MERGED QUERIES WILL BE EXECUTED AT THE END OF THE FUNCTION) */
+					continue;
+				}
+
+				/* FIRST TIME UPDATE EACH ATTRIBUTE IN A SINGLE QUERY AND SAVE ATTRIBUTE NAME IN `knownattributes` */
 				snprintf(query, sizeof(query), "UPDATE %s%s SET `%s` = '%s' WHERE "SQL_UID_FIELD" = '%u'", tab_prefix, tab, col, escape, uid);
 				//      eventlog(eventlog_level_trace, "db_set", "update query: %s", query);
 
@@ -446,11 +475,36 @@ namespace pvpgn
 							eventlog(eventlog_level_error, __FUNCTION__, "could not INSERT attribute '%s'->'%s'", attr_get_key(attr), attr_get_val(attr));
 							continue;
 						}
+						else
+							knownattributes[tab].push_back(col); // if query success add attribute in known table
 					}
+					else
+						knownattributes[tab].push_back(col); // if query success add attribute in known table
 				}
+				else
+					knownattributes[tab].push_back(col); // if query success add attribute in known table
 
 				attr_clear_dirty(attr);
 			}
+			
+			std::string query_s;
+			// iterate all queries
+			for (std::map<std::string, std::string>::iterator q = queries.begin(); q != queries.end(); ++q)
+			{
+				query_s = "UPDATE " + std::string(tab_prefix) + q->first + " SET ";
+				query_s += q->second.substr(0, q->second.size() - 2); // remove last reduntant comma at the end of the string with parameters
+				query_s += " WHERE "SQL_UID_FIELD" = '" + std_to_string(uid) + "'";
+
+				if (!sql->query(query_s.c_str()))
+				{
+					//eventlog(eventlog_level_trace, __FUNCTION__, "query: %s", query_s.c_str());
+				}
+				else
+				{
+					eventlog(eventlog_level_error, __FUNCTION__, "sql error (%s)", query_s.c_str());
+				}
+			}
+
 
 			return 0;
 		}

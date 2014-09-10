@@ -220,7 +220,8 @@ namespace pvpgn
 					switch ((t_attr_type)attrtype)
 					{
 					case attr_type_str:
-						attrvalue = account_get_strattr(account, attrkey);
+						if (const char * val = account_get_strattr(account, attrkey))
+							attrvalue = val;
 						break;
 					case attr_type_num:
 						attrvalue = std_to_string(account_get_numattr(account, attrkey));
@@ -229,7 +230,8 @@ namespace pvpgn
 						attrvalue = account_get_boolattr(account, attrkey) == 0 ? "false" : "true";
 						break;
 					case attr_type_raw:
-						attrvalue = account_get_rawattr(account, attrkey);
+						if (const char * val = account_get_rawattr(account, attrkey))
+							attrvalue = val;
 						break;
 					}
 				}
@@ -460,11 +462,37 @@ namespace pvpgn
 			{
 				eventlog(eventlog_level_error, __FUNCTION__, "lua exception\n");
 			}
-
 			return 1;
 		}
+		extern int __game_get_by_name(lua_State* L)
+		{
+			const char* gamename;
+			const char* clienttag_str;
+			int gametype;
+			std::map<std::string, std::string> o_game;
+			try
+			{
+				lua::stack st(L);
+				// get args
+				st.at(1, gamename);
+				st.at(2, clienttag_str);
+				st.at(3, gametype);
 
+				t_clienttag clienttag = tag_str_to_uint(clienttag_str);
+				o_game = get_game_object(gamename, clienttag, (t_game_type)gametype);
 
+				st.push(o_game);
+			}
+			catch (const std::exception& e)
+			{
+				eventlog(eventlog_level_error, __FUNCTION__, e.what());
+			}
+			catch (...)
+			{
+				eventlog(eventlog_level_error, __FUNCTION__, "lua exception\n");
+			}
+			return 1;
+		}
 
 
 
@@ -494,7 +522,7 @@ namespace pvpgn
 			return 1;
 		}
 
-		/* Get usernames online. If allaccounts = true then return all server users  */
+		/* Get usernames online. If allaccounts = true then return all accounts that were used by the server since start  */
 		extern int __server_get_users(lua_State* L)
 		{
 			bool allaccounts = false;
@@ -727,6 +755,35 @@ namespace pvpgn
 				{
 					if (t_connection * c = account_get_conn(account))
 						conn_client_readmemory(c, request_id, offset, length);
+				}
+			}
+			catch (const std::exception& e)
+			{
+				eventlog(eventlog_level_error, __FUNCTION__, e.what());
+			}
+			catch (...)
+			{
+				eventlog(eventlog_level_error, __FUNCTION__, "lua exception\n");
+			}
+			return 0;
+		}
+
+		/* Send SID_REQUIREDWORK packet to a client */
+		extern int __client_requiredwork(lua_State* L)
+		{
+			const char * username;
+			const char * filename;
+			try
+			{
+				lua::stack st(L);
+				// get args
+				st.at(1, username);
+				st.at(2, filename);
+
+				if (t_account * account = accountlist_find_account(username))
+				{
+					if (t_connection * c = account_get_conn(account))
+						conn_client_requiredwork(c, filename);
 				}
 			}
 			catch (const std::exception& e)
